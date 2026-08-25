@@ -1,0 +1,35 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated files
+/vendor/
+/backend/vendor/
+/node_modules/
+
+# Runtime data
+/logs/
+/backend/logs/
+/cache/
+/tmp/
+/temp/
+/temporary/
+/backend/uploads/*
+
+# Local database dumps
+*.sql.gz
+*.dump
+*.bak
+
+# IDE and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Debug and local runtime files
+*.log
+*.tmp
+*.temp
+*.swp

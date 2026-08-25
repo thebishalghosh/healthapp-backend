@@ -1,0 +1,13 @@
+{
+	"name": "health-app/backend",
+	"description": "AI Health and Wellness application backend",
+	"type": "project",
+	"require": {
+		"php": ">=8.2"
+	},
+	"autoload": {
+		"psr-4": {
+			"App\\": "src/"
+		}
+	}
+}

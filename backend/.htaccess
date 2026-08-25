@@ -1,0 +1,9 @@
+RewriteEngine On
+DirectorySlash Off
+
+SetEnvIf Authorization "(.+)" HTTP_AUTHORIZATION=$1
+
+RewriteRule ^api/v1/health/nutrition/?$ index.php [QSA,L]
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^ index.php [QSA,L]
