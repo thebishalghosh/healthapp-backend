@@ -27,6 +27,15 @@ $authRoutes = [
 	'PUT /api/v1/health/profile' => __DIR__ . '/api/v1/health/profile.php',
 	'GET /api/v1/health/nutrition' => __DIR__ . '/api/v1/health/nutrition.php',
 	'POST /api/v1/health/nutrition/calculate' => __DIR__ . '/api/v1/health/nutrition/calculate.php',
+	'POST /api/v1/health/water' => __DIR__ . '/api/v1/health/water.php',
+	'GET /api/v1/health/water' => __DIR__ . '/api/v1/health/water.php',
+	'POST /api/v1/health/food' => __DIR__ . '/api/v1/health/food.php',
+	'GET /api/v1/health/food' => __DIR__ . '/api/v1/health/food.php',
+	'POST /api/v1/health/workouts' => __DIR__ . '/api/v1/health/workouts.php',
+	'GET /api/v1/health/workouts' => __DIR__ . '/api/v1/health/workouts.php',
+	'POST /api/v1/health/sleep' => __DIR__ . '/api/v1/health/sleep.php',
+	'GET /api/v1/health/sleep' => __DIR__ . '/api/v1/health/sleep.php',
+	'GET /api/v1/health/today' => __DIR__ . '/api/v1/health/today.php',
 ];
 
 $route = $method . ' ' . rtrim($path, '/');

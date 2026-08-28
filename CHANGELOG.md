@@ -4,7 +4,35 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-Reserved for upcoming development.
+### Added
+
+#### Phase 1 Health Tracking Foundation
+
+- Added authenticated water logging and daily water aggregation at `/api/v1/health/water`.
+- Added authenticated food logging and daily meal totals at `/api/v1/health/food`.
+- Added authenticated workout logging and daily workout totals at `/api/v1/health/workouts`.
+- Added authenticated sleep logging and today's sleep retrieval at `/api/v1/health/sleep`.
+- Added the authenticated daily summary endpoint at `/api/v1/health/today`.
+- Reused the existing `water_logs`, `meal_logs`, `workout_logs`, and `sleep_logs` tables; no duplicate tracking tables were added.
+- Added `snack` to the existing `meal_logs.meal_type` enum.
+
+### Validation and Security
+
+- Tracking POST endpoints validate JSON, required fields, numeric ranges, controlled meal types, dates, times, and durations server-side.
+- All tracking data is scoped to the authenticated bearer-token user.
+- Tracking timestamps and daily aggregation boundaries use explicit UTC.
+- Nutrition targets are read from existing Nutrition Requirements v1 results; missing or stale nutrition is never replaced with a hardcoded target.
+
+### Verification
+
+- PHP syntax checks passed for the tracking service and health endpoints.
+- `git diff --check` passed.
+- No automated backend test directory was present; live API tests require a configured local database and authenticated test data.
+
+### Limitations
+
+- Nutrition calculations remain the existing Phase 1 estimates and were not changed.
+- The daily summary returns null nutrition and water targets until a nutrition calculation exists.
 
 ## [2026-08-25] - Authentication, Health Profile & Nutrition Requirements v1
 

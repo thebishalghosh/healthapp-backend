@@ -51,8 +51,8 @@ if ($method === 'PUT') {
 	}
 
 	if (array_key_exists('date_of_birth', $body)) {
-		$date = is_string($body['date_of_birth']) ? DateTimeImmutable::createFromFormat('!Y-m-d', $body['date_of_birth']) : false;
-		if (!$date || $date->format('Y-m-d') !== $body['date_of_birth'] || $date > new DateTimeImmutable('today')) {
+		$date = is_string($body['date_of_birth']) ? DateTimeImmutable::createFromFormat('!Y-m-d', $body['date_of_birth'], new DateTimeZone('UTC')) : false;
+		if (!$date || $date->format('Y-m-d') !== $body['date_of_birth'] || $date > new DateTimeImmutable('today', new DateTimeZone('UTC'))) {
 			$fields['date_of_birth'] = 'Date of birth must be a valid date that is not in the future.';
 		}
 	}

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 final class NutritionService
 {
+	private const APPLICATION_TIMEZONE = 'UTC';
+
 	private const ACTIVITY_MULTIPLIERS = [
 		'sedentary' => 1.2,
 		'light' => 1.375,
@@ -32,9 +34,9 @@ final class NutritionService
 		}
 
 		$date = is_string($profile['date_of_birth'] ?? null)
-			? DateTimeImmutable::createFromFormat('!Y-m-d', $profile['date_of_birth'])
+			? DateTimeImmutable::createFromFormat('!Y-m-d', $profile['date_of_birth'], new DateTimeZone(self::APPLICATION_TIMEZONE))
 			: false;
-		$today = new DateTimeImmutable('today');
+		$today = new DateTimeImmutable('today', new DateTimeZone(self::APPLICATION_TIMEZONE));
 
 		if (!$date || $date->format('Y-m-d') !== ($profile['date_of_birth'] ?? null) || $date > $today) {
 			$errors['date_of_birth'] = 'Date of birth must be a valid date that is not in the future.';
@@ -49,8 +51,8 @@ final class NutritionService
 			$errors['gender'] = 'Gender must be male or female for this calculation method.';
 		}
 
-		if (!is_numeric($profile['height_cm'] ?? null) || (float) $profile['height_cm'] <= 0 || (float) $profile['height_cm'] > 300) {
-			$errors['height_cm'] = 'Height must be greater than 0 and at most 300 cm.';
+		if (!is_numeric($profile['height_cm'] ?? null) || (float) $profile['height_cm'] < 50 || (float) $profile['height_cm'] > 300) {
+			$errors['height_cm'] = 'Height must be between 50 and 300 cm.';
 		}
 
 		if (!is_numeric($profile['weight_kg'] ?? null) || (float) $profile['weight_kg'] <= 0 || (float) $profile['weight_kg'] > 500) {
@@ -70,8 +72,9 @@ final class NutritionService
 
 	public static function calculate(array $profile): array
 	{
-		$date = new DateTimeImmutable($profile['date_of_birth']);
-		$age = $date->diff(new DateTimeImmutable('today'))->y;
+		$date = new DateTimeImmutable($profile['date_of_birth'], new DateTimeZone(self::APPLICATION_TIMEZONE));
+		$today = new DateTimeImmutable('today', new DateTimeZone(self::APPLICATION_TIMEZONE));
+		$age = $date->diff($today)->y;
 		$weight = (float) $profile['weight_kg'];
 		$height = (float) $profile['height_cm'];
 		$bmr = 10 * $weight + 6.25 * $height - 5 * $age + ($profile['gender'] === 'male' ? 5 : -161);
@@ -86,7 +89,7 @@ final class NutritionService
 		$water = 35 * $weight;
 
 		return [
-			'calculated_date' => gmdate('Y-m-d'),
+			'calculated_date' => $today->format('Y-m-d'),
 			'calories_target' => round($calories, 2),
 			'protein_g' => round($protein, 2),
 			'carbohydrates_g' => round($carbohydrates, 2),

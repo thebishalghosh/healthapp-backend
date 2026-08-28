@@ -445,6 +445,7 @@ CREATE TABLE meal_logs (
     meal_type ENUM(
         'breakfast',
         'morning_snack',
+        'snack',
         'lunch',
         'evening_snack',
         'dinner',
