@@ -55,7 +55,7 @@ final class HealthTrackingService
 	public static function latestNutrition(PDO $database, int $userId): ?array
 	{
 		$statement = $database->prepare(
-			'SELECT n.id, n.calories_target, n.water_ml, n.created_at, up.updated_at AS profile_updated_at
+			'SELECT n.id, n.calories_target, n.protein_g, n.carbohydrates_g, n.fat_g, n.fiber_g, n.water_ml, n.created_at, up.updated_at AS profile_updated_at
 			 FROM nutrition_requirements n
 			 LEFT JOIN user_profiles up ON up.user_id = n.user_id
 			 WHERE n.user_id = :user_id

@@ -1601,6 +1601,7 @@ CREATE TABLE ai_usage_logs (
         'food_scanner',
         'chatbot',
         'health_report',
+        'food_recommendations',
         'other'
     ) NOT NULL,
 
@@ -1620,6 +1621,9 @@ CREATE TABLE ai_usage_logs (
         'failed'
     ) NOT NULL,
 
+    requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    http_status SMALLINT UNSIGNED NULL,
+    response_time_ms INT UNSIGNED NULL,
     error_message TEXT NULL,
 
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1632,6 +1636,65 @@ CREATE TABLE ai_usage_logs (
     INDEX idx_ai_usage_user_date (user_id, created_at),
     INDEX idx_ai_usage_feature (feature_type, created_at),
     INDEX idx_ai_usage_request (request_id)
+) ENGINE=InnoDB;
+
+
+-- ============================================================
+-- 33A. AI FOOD RECOMMENDATION HISTORY
+-- ============================================================
+
+CREATE TABLE ai_food_recommendation_generations (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+
+    user_id BIGINT UNSIGNED NOT NULL,
+
+    requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    requested_meal_type VARCHAR(50) NULL,
+    daily_context JSON NOT NULL,
+
+    generated_by VARCHAR(100) NOT NULL DEFAULT 'gemini',
+    ai_model VARCHAR(100) NULL,
+
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_ai_recommendation_generations_user
+        FOREIGN KEY (user_id)
+        REFERENCES users(id)
+        ON DELETE CASCADE,
+
+    INDEX idx_ai_recommendation_generations_user_date (user_id, requested_at),
+    INDEX idx_ai_recommendation_generations_created (created_at)
+) ENGINE=InnoDB;
+
+
+CREATE TABLE ai_food_recommendations (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+
+    generation_id BIGINT UNSIGNED NOT NULL,
+
+    recommendation_type VARCHAR(50) NOT NULL,
+    title VARCHAR(191) NOT NULL,
+    description TEXT NULL,
+    foods JSON NOT NULL,
+
+    calories DECIMAL(10,2) NOT NULL,
+    protein_g DECIMAL(10,2) NOT NULL,
+    carbohydrates_g DECIMAL(10,2) NOT NULL,
+    fat_g DECIMAL(10,2) NOT NULL,
+    fiber_g DECIMAL(10,2) NOT NULL,
+
+    reason TEXT NULL,
+
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_ai_recommendations_generation
+        FOREIGN KEY (generation_id)
+        REFERENCES ai_food_recommendation_generations(id)
+        ON DELETE CASCADE,
+
+    INDEX idx_ai_recommendations_generation (generation_id),
+    INDEX idx_ai_recommendations_type (recommendation_type)
 ) ENGINE=InnoDB;
 
 
