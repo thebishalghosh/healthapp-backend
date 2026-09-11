@@ -9,7 +9,7 @@ require_once dirname(__DIR__, 3) . '/core/auth.php';
 require_once dirname(__DIR__, 3) . '/services/HealthTrackingService.php';
 
 $method = $_SERVER['REQUEST_METHOD'] ?? '';
-if (!in_array($method, ['GET', 'POST'], true)) {
+if (!in_array($method, ['GET', 'POST', 'DELETE'], true)) {
 	response_error('METHOD_NOT_ALLOWED', 'Method not allowed.', 405);
 }
 
@@ -19,6 +19,35 @@ $database = database_connection();
 [$today, $tomorrow] = HealthTrackingService::todayBounds();
 $start = $today->format('Y-m-d H:i:s');
 $end = $tomorrow->format('Y-m-d H:i:s');
+
+if ($method === 'DELETE') {
+	$id = filter_var($_GET['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+	if ($id === false) {
+		response_validation_error(['id' => 'ID must be a positive integer.']);
+	}
+
+	$deleteStatement = $database->prepare('DELETE FROM water_logs WHERE id = :id AND user_id = :user_id');
+	$deleteStatement->execute(['id' => $id, 'user_id' => $userId]);
+	if ($deleteStatement->rowCount() === 0) {
+		response_error('WATER_LOG_NOT_FOUND', 'Water entry was not found.', 404);
+	}
+
+	$nutrition = HealthTrackingService::nutritionOrError($database, $userId);
+	$summaryStatement = $database->prepare('SELECT COALESCE(SUM(amount_ml), 0) AS consumed_ml FROM water_logs WHERE user_id = :user_id AND consumed_at >= :start AND consumed_at < :end');
+	$summaryStatement->execute(['user_id' => $userId, 'start' => $start, 'end' => $end]);
+	$consumed = (float) $summaryStatement->fetch()['consumed_ml'];
+	$target = (float) $nutrition['water_ml'];
+	$percentage = $target > 0 ? min(100, ($consumed / $target) * 100) : 0;
+
+	response_success([
+		'water' => [
+			'consumed_ml' => round($consumed, 2),
+			'target_ml' => round($target, 2),
+			'remaining_ml' => round(max(0, $target - $consumed), 2),
+			'percentage' => round($percentage, 2),
+		],
+	], 'Water entry deleted.');
+}
 
 if ($method === 'POST') {
 	$body = auth_json_body();

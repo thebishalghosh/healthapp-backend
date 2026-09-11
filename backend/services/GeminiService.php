@@ -78,40 +78,119 @@ final class GeminiService
 			'generationConfig' => $generationConfig,
 		], JSON_THROW_ON_ERROR);
 
-		$curl = curl_init($url);
-		if ($curl === false) {
-			throw new RuntimeException('Gemini request could not be initialized.');
-		}
+		$maxAttempts = 2;
+		$maxRetryDelaySeconds = 3.0;
+		$lastStatus = null;
+		$lastErrorStatus = 'unknown';
 
-		curl_setopt_array($curl, [
-			CURLOPT_POST => true,
-			CURLOPT_RETURNTRANSFER => true,
-			CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'X-goog-api-key: ' . $apiKey],
-			CURLOPT_POSTFIELDS => $payload,
-			CURLOPT_CONNECTTIMEOUT => min($timeout, 10),
-			CURLOPT_TIMEOUT => $timeout,
-		]);
-		$responseBody = curl_exec($curl);
-		$curlError = curl_error($curl);
-		$status = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
-		curl_close($curl);
+		for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+			$curl = curl_init($url);
+			if ($curl === false) {
+				throw new RuntimeException('Gemini request could not be initialized.');
+			}
 
-		if ($responseBody === false || $curlError !== '') {
-			throw new RuntimeException('Gemini request failed.');
-		}
+			curl_setopt_array($curl, [
+				CURLOPT_POST => true,
+				CURLOPT_RETURNTRANSFER => true,
+				CURLOPT_HEADER => true,
+				CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'X-goog-api-key: ' . $apiKey],
+				CURLOPT_POSTFIELDS => $payload,
+				CURLOPT_CONNECTTIMEOUT => min($timeout, 10),
+				CURLOPT_TIMEOUT => $timeout,
+			]);
+			$rawResponse = curl_exec($curl);
+			$curlError = curl_error($curl);
+			$status = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
+			$headerSize = (int) curl_getinfo($curl, CURLINFO_HEADER_SIZE);
+			curl_close($curl);
 
-		if ($status < 200 || $status >= 300) {
+			$lastStatus = $status > 0 ? $status : null;
+			if ($rawResponse === false || $curlError !== '') {
+				$exceptionMessage = $curlError === '' ? 'Gemini request failed.' : 'Gemini request failed (cURL error: ' . $curlError . ').';
+				throw new RuntimeException($exceptionMessage);
+			}
+
+			$responseHeaders = substr((string) $rawResponse, 0, $headerSize);
+			$responseBody = substr((string) $rawResponse, $headerSize);
+			if ($status >= 200 && $status < 300) {
+				return $responseBody;
+			}
+
 			$errorStatus = 'unknown';
-			$errorResponse = json_decode((string) $responseBody, true);
+			$errorCode = null;
+			$errorResponse = json_decode($responseBody, true);
 			if (is_array($errorResponse) && is_array($errorResponse['error'] ?? null)) {
+				$errorCode = $errorResponse['error']['code'] ?? null;
 				$errorStatus = is_string($errorResponse['error']['status'] ?? null)
 					? $errorResponse['error']['status']
 					: (string) ($errorResponse['error']['code'] ?? 'unknown');
 			}
-			throw new RuntimeException('Gemini HTTP error ' . $status . ' (' . preg_replace('/[^A-Z0-9_-]/', '', $errorStatus) . ').');
+			$lastErrorStatus = preg_replace('/[^A-Z0-9_-]/', '', $errorStatus) ?: 'unknown';
+			$retryable = in_array($status, [429, 503], true);
+			$dailyFreeTierQuotaExceeded = false;
+			if ($status === 429 && is_array($errorResponse['error']['details'] ?? null)) {
+				foreach ($errorResponse['error']['details'] as $detail) {
+					if (!is_array($detail) || !is_string($detail['@type'] ?? null)) {
+						continue;
+					}
+					$detailType = $detail['@type'];
+					if (str_ends_with($detailType, 'QuotaFailure') && is_array($detail['violations'] ?? null)) {
+						foreach ($detail['violations'] as $violation) {
+							if (!is_array($violation)) {
+								continue;
+							}
+							$quotaId = $violation['quotaId'] ?? null;
+							$quotaMetric = $violation['quotaMetric'] ?? null;
+							if ($quotaId === 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' || $quotaMetric === 'generativelanguage.googleapis.com/generate_content_free_tier_requests') {
+								$dailyFreeTierQuotaExceeded = true;
+							}
+						}
+					}
+				}
+			}
+			if ($dailyFreeTierQuotaExceeded) {
+				$retryable = false;
+			}
+
+			if (!$retryable || $attempt >= $maxAttempts) {
+				$exceptionMessage = 'Gemini HTTP error ' . $status . ' (' . $lastErrorStatus . ').';
+				if ($dailyFreeTierQuotaExceeded) {
+					$exceptionMessage .= ' (daily free-tier quota exhausted; retry suppressed).';
+				}
+				throw new RuntimeException($exceptionMessage);
+			}
+
+			$retryDelaySeconds = null;
+			if (preg_match('/^\s*Retry-After\s*:\s*([^\r\n]+)\s*$/im', $responseHeaders, $matches) === 1) {
+				$retryAfter = trim($matches[1]);
+				if (is_numeric($retryAfter)) {
+					$retryDelaySeconds = (float) $retryAfter;
+				} else {
+					$retryAt = strtotime($retryAfter);
+					if ($retryAt !== false) {
+						$retryDelaySeconds = max(0.0, $retryAt - time());
+					}
+				}
+			}
+			if ($retryDelaySeconds === null && is_array($errorResponse['error']['details'] ?? null)) {
+				foreach ($errorResponse['error']['details'] as $detail) {
+					if (is_array($detail) && is_string($detail['retryDelay'] ?? null) && preg_match('/^\s*([0-9]+(?:\.[0-9]+)?)s\s*$/', $detail['retryDelay'], $matches) === 1) {
+						$retryDelaySeconds = (float) $matches[1];
+						break;
+					}
+				}
+			}
+			if ($retryDelaySeconds === null) {
+				$retryDelaySeconds = 0.5 * (2 ** ($attempt - 1));
+			}
+
+			$selectedRetryDelaySeconds = min($maxRetryDelaySeconds, max(0.0, $retryDelaySeconds));
+			usleep((int) ($selectedRetryDelaySeconds * 1_000_000));
 		}
 
-		return $responseBody;
+		$detail = $lastStatus === null ? 'unknown transport failure' : 'HTTP ' . $lastStatus . ' (' . $lastErrorStatus . ')';
+		$exceptionMessage = 'Gemini request failed after ' . $maxAttempts . ' attempts (' . $detail . ').';
+		throw new RuntimeException($exceptionMessage);
 	}
 
 	private static function buildPrompt(array $context, ?string $mealType): string

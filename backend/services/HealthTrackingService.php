@@ -20,6 +20,28 @@ final class HealthTrackingService
 		return [$today, $today->modify('+1 day')];
 	}
 
+	public static function validTimezone(mixed $value): bool
+	{
+		return is_string($value) && in_array($value, DateTimeZone::listIdentifiers(), true);
+	}
+
+	public static function utcDateBounds(string $date, string $timezone): array
+	{
+		if (!self::validDate($date) || !self::validTimezone($timezone)) {
+			throw new InvalidArgumentException('Date and timezone must be valid.');
+		}
+
+		$localTimezone = new DateTimeZone($timezone);
+		$utcTimezone = new DateTimeZone(self::TIMEZONE);
+		$localStart = new DateTimeImmutable($date . ' 00:00:00', $localTimezone);
+		$localEnd = $localStart->modify('+1 day');
+
+		return [
+			$localStart->setTimezone($utcTimezone)->format('Y-m-d H:i:s'),
+			$localEnd->setTimezone($utcTimezone)->format('Y-m-d H:i:s'),
+		];
+	}
+
 	public static function validNumber(mixed $value, float $minimum, ?float $maximum = null): bool
 	{
 		if (!is_numeric($value)) {

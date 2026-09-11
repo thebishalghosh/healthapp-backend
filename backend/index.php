@@ -33,10 +33,21 @@ $authRoutes = [
 	'POST /api/v1/ai/test' => __DIR__ . '/api/v1/ai/test.php',
 	'POST /api/v1/health/water' => __DIR__ . '/api/v1/health/water.php',
 	'GET /api/v1/health/water' => __DIR__ . '/api/v1/health/water.php',
+	'DELETE /api/v1/health/water' => __DIR__ . '/api/v1/health/water.php',
+	'GET /api/v1/health/water/history' => __DIR__ . '/api/v1/health/water-history.php',
 	'POST /api/v1/health/food' => __DIR__ . '/api/v1/health/food.php',
 	'GET /api/v1/health/food' => __DIR__ . '/api/v1/health/food.php',
+	'PUT /api/v1/health/food' => __DIR__ . '/api/v1/health/food.php',
+	'DELETE /api/v1/health/food' => __DIR__ . '/api/v1/health/food.php',
+	'GET /api/v1/health/food/history' => __DIR__ . '/api/v1/health/food-history.php',
 	'POST /api/v1/health/workouts' => __DIR__ . '/api/v1/health/workouts.php',
 	'GET /api/v1/health/workouts' => __DIR__ . '/api/v1/health/workouts.php',
+	'PUT /api/v1/health/workouts' => __DIR__ . '/api/v1/health/workouts.php',
+	'DELETE /api/v1/health/workouts' => __DIR__ . '/api/v1/health/workouts.php',
+	'GET /api/v1/health/workouts/history' => __DIR__ . '/api/v1/health/workouts-history.php',
+	'GET /api/v1/health/streak' => __DIR__ . '/api/v1/health/streak.php',
+	'GET /api/v1/reminders' => __DIR__ . '/api/v1/reminders/list.php',
+	'POST /api/v1/reminders' => __DIR__ . '/api/v1/reminders/create.php',
 	'POST /api/v1/health/sleep' => __DIR__ . '/api/v1/health/sleep.php',
 	'GET /api/v1/health/sleep' => __DIR__ . '/api/v1/health/sleep.php',
 	'GET /api/v1/health/today' => __DIR__ . '/api/v1/health/today.php',
@@ -46,6 +57,12 @@ $route = $method . ' ' . rtrim($path, '/');
 
 if (isset($authRoutes[$route])) {
 	require $authRoutes[$route];
+	exit;
+}
+
+if (preg_match('#^/api/v1/reminders/([1-9][0-9]*)$#', rtrim($path, '/'), $matches) === 1 && in_array($method, ['PUT', 'DELETE'], true)) {
+	$_GET['id'] = $matches[1];
+	require __DIR__ . '/api/v1/reminders/' . ($method === 'PUT' ? 'update.php' : 'delete.php');
 	exit;
 }
 
