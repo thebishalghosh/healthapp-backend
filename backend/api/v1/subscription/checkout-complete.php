@@ -13,21 +13,20 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
 	response_error('METHOD_NOT_ALLOWED', 'Method not allowed.', 405);
 }
 
-$user = authenticated_user();
 $body = auth_json_body();
+$claims = RazorpayService::verifyCheckoutToken((string) ($body['token'] ?? ''));
 $paymentId = trim((string) ($body['razorpay_payment_id'] ?? ''));
 $providerSubscriptionId = trim((string) ($body['razorpay_subscription_id'] ?? ''));
 $signature = trim((string) ($body['razorpay_signature'] ?? ''));
-if ($paymentId === '' || $providerSubscriptionId === '' || $signature === '') {
-	response_error('INVALID_CHECKOUT_VERIFICATION', 'Checkout verification fields are required.', 422);
+if ($claims === null || $paymentId === '' || $providerSubscriptionId === '' || $signature === '') {
+	response_error('INVALID_CHECKOUT_VERIFICATION', 'Checkout verification failed.', 400);
 }
 
 $database = database_connection();
 $subscription = SubscriptionService::findProviderSubscription($database, $providerSubscriptionId);
-if (!$subscription || (int) $subscription['user_id'] !== (int) $user['id']) {
-	response_error('SUBSCRIPTION_NOT_FOUND', 'The subscription does not belong to the authenticated user.', 404);
+if (!$subscription || (int) $subscription['id'] !== $claims['subscription_id'] || (int) $subscription['user_id'] !== $claims['user_id']) {
+	response_error('SUBSCRIPTION_NOT_FOUND', 'The subscription could not be verified.', 404);
 }
-
 if (!RazorpayService::verifyCheckoutSignature($paymentId, $providerSubscriptionId, $signature)) {
 	error_log(sprintf(
 		'[razorpay] checkout signature rejected payment_id=%s subscription_id=%s',
@@ -42,22 +41,24 @@ try {
 	if (($providerSubscription['id'] ?? null) !== $providerSubscriptionId || ($providerSubscription['plan_id'] ?? null) !== ($subscription['razorpay_plan_id'] ?? null)) {
 		response_error('RAZORPAY_SUBSCRIPTION_MISMATCH', 'The Razorpay subscription does not match the local plan.', 400);
 	}
-
 	$database->beginTransaction();
 	SubscriptionService::syncProviderSubscription($database, (int) $subscription['id'], $providerSubscription);
-	SubscriptionService::recordProviderPayment($database, $subscription, [
-		'id' => $paymentId,
-		'currency' => $subscription['currency'],
-	], 'success');
+	SubscriptionService::recordProviderPayment($database, $subscription, ['id' => $paymentId, 'currency' => $subscription['currency']], 'success');
 	$database->commit();
-
-	response_success(['subscription' => SubscriptionService::getCurrentSubscription($database, (int) $user['id'])], 'Razorpay subscription verified.');
+	if (in_array($providerSubscription['status'] ?? null, ['active', 'authenticated'], true)) {
+		SubscriptionService::retirePreviousActiveSubscriptions($database, (int) $subscription['id']);
+	}
+	$providerStatus = (string) ($providerSubscription['status'] ?? 'created');
+	if ($providerStatus !== 'active' && $providerStatus !== 'authenticated') {
+		response_success(
+			['status' => 'pending', 'provider_status' => $providerStatus],
+			'Payment received. Subscription activation is being confirmed.'
+		);
+	}
+	response_success(['status' => 'verified'], 'Razorpay subscription verified.');
 } catch (Throwable $exception) {
 	if ($database->inTransaction()) {
 		$database->rollBack();
-	}
-	if ($exception instanceof PDOException && $exception->getCode() === '23000') {
-		response_success(['subscription' => SubscriptionService::getCurrentSubscription($database, (int) $user['id'])], 'Razorpay subscription already verified.');
 	}
 	response_error('RAZORPAY_VERIFICATION_FAILED', 'Unable to verify the Razorpay subscription.', 502);
 }

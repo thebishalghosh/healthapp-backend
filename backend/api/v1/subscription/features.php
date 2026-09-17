@@ -5,10 +5,12 @@ declare(strict_types=1);
 if (!function_exists('response_error')) {
 	require_once dirname(__DIR__, 3) . '/bootstrap.php';
 }
+require_once dirname(__DIR__, 3) . '/core/auth.php';
 require_once dirname(__DIR__, 3) . '/services/SubscriptionService.php';
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
 	response_error('METHOD_NOT_ALLOWED', 'Method not allowed.', 405);
 }
 
-response_success(['plans' => SubscriptionService::getActivePlans(database_connection())], 'Subscription plans.');
+$user = authenticated_user();
+response_success(['features' => SubscriptionService::getFeatures(database_connection(), (int) $user['id'])], 'Subscription features.');

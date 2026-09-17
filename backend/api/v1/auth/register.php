@@ -6,6 +6,7 @@ if (!function_exists('response_error')) {
 	require_once dirname(__DIR__, 3) . '/bootstrap.php';
 }
 require_once dirname(__DIR__, 3) . '/core/auth.php';
+require_once dirname(__DIR__, 3) . '/services/SubscriptionService.php';
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
 	response_error('METHOD_NOT_ALLOWED', 'Method not allowed.', 405);
@@ -39,6 +40,7 @@ try {
 		'first_name' => $firstName,
 		'last_name' => $lastName,
 	]);
+	SubscriptionService::ensureFreeSubscription($database, $userId);
 	$database->commit();
 
 	response_success(['user' => [

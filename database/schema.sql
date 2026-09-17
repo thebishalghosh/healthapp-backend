@@ -978,12 +978,21 @@ CREATE TABLE subscription_plans (
         'lifetime'
     ) NOT NULL,
 
+    billing_period ENUM(
+        'monthly',
+        'quarterly',
+        'yearly',
+        'lifetime'
+    ) NOT NULL DEFAULT 'monthly',
+
     price DECIMAL(12,2) NOT NULL DEFAULT 0,
     currency VARCHAR(10) NOT NULL DEFAULT 'INR',
 
     trial_days INT UNSIGNED NOT NULL DEFAULT 0,
 
     features JSON NULL,
+
+    razorpay_plan_id VARCHAR(191) NULL,
 
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
 
@@ -1005,6 +1014,8 @@ CREATE TABLE subscriptions (
 
     provider VARCHAR(100) NULL,
 
+    provider_customer_id VARCHAR(191) NULL,
+
     provider_subscription_id VARCHAR(191) NULL,
 
     status ENUM(
@@ -1019,6 +1030,8 @@ CREATE TABLE subscriptions (
     started_at DATETIME NULL,
     current_period_start DATETIME NULL,
     current_period_end DATETIME NULL,
+
+    expires_at DATETIME NULL,
 
     cancelled_at DATETIME NULL,
 
@@ -1043,10 +1056,40 @@ CREATE TABLE subscriptions (
     INDEX idx_subscriptions_status (status),
     INDEX idx_subscriptions_period (current_period_end),
 
+    INDEX idx_subscriptions_expiry (expires_at),
+
     UNIQUE KEY uq_provider_subscription (
         provider,
         provider_subscription_id
     )
+) ENGINE=InnoDB;
+
+
+-- ============================================================
+-- 22. PLAN FEATURES
+-- ============================================================
+
+CREATE TABLE plan_features (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+
+    plan_id BIGINT UNSIGNED NOT NULL,
+
+    feature_code VARCHAR(100) NOT NULL,
+
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,
+
+    value VARCHAR(191) NULL,
+
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_plan_features_plan
+        FOREIGN KEY (plan_id)
+        REFERENCES subscription_plans(id)
+        ON DELETE CASCADE,
+
+    UNIQUE KEY uq_plan_feature (plan_id, feature_code),
+    INDEX idx_plan_features_code (feature_code)
 ) ENGINE=InnoDB;
 
 
@@ -1065,6 +1108,8 @@ CREATE TABLE payments (
 
     provider_payment_id VARCHAR(191) NULL,
     provider_order_id VARCHAR(191) NULL,
+
+    razorpay_subscription_id VARCHAR(191) NULL,
 
     amount DECIMAL(12,2) NOT NULL,
     currency VARCHAR(10) NOT NULL DEFAULT 'INR',
@@ -1098,7 +1143,26 @@ CREATE TABLE payments (
 
     INDEX idx_payments_user (user_id),
     INDEX idx_payments_status (status),
-    INDEX idx_payments_provider_payment (provider, provider_payment_id)
+    INDEX idx_payments_provider_payment (provider, provider_payment_id),
+    UNIQUE KEY uq_payments_provider_payment (provider, provider_payment_id)
+) ENGINE=InnoDB;
+
+
+-- ============================================================
+-- 23. PAYMENT WEBHOOK EVENTS
+-- ============================================================
+
+CREATE TABLE payment_webhook_events (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+
+    provider VARCHAR(100) NOT NULL,
+    event_key VARCHAR(191) NOT NULL,
+    event_name VARCHAR(100) NOT NULL,
+    payload_hash CHAR(64) NOT NULL,
+    processed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE KEY uq_webhook_provider_event (provider, event_key),
+    INDEX idx_webhook_event_name (event_name)
 ) ENGINE=InnoDB;
 
 
@@ -1732,7 +1796,7 @@ CREATE TABLE audit_logs (
 
 
 -- ============================================================
--- 35. INITIAL SUBSCRIPTION PLANS
+-- 35. INITIAL SUBSCRIPTION PLANS AND ENTITLEMENTS
 -- ============================================================
 
 INSERT INTO subscription_plans
@@ -1741,54 +1805,99 @@ INSERT INTO subscription_plans
     name,
     description,
     billing_interval,
+    billing_period,
     price,
     currency,
-    trial_days,
-    features
+    trial_days
 )
 VALUES
 (
-    'free',
+    'FREE',
     'Free',
     'Free health and wellness plan',
     'monthly',
-    0.00,
-    'INR',
-    0,
-    JSON_OBJECT(
-        'ai_food_scanner', true,
-        'ai_meal_planning', true,
-        'smart_reminders', true,
-        'goals', true,
-        'streaks', true,
-        'achievements', true,
-        'weekly_reports', true,
-        'workout_music', true,
-        'advertisements', true,
-        'ai_chatbot', false
-    )
-),
-(
-    'premium_monthly',
-    'Premium Monthly',
-    'Premium monthly subscription',
     'monthly',
     0.00,
     'INR',
-    0,
-    JSON_OBJECT(
-        'ai_food_scanner', true,
-        'ai_meal_planning', true,
-        'smart_reminders', true,
-        'goals', true,
-        'streaks', true,
-        'achievements', true,
-        'weekly_reports', true,
-        'workout_music', true,
-        'advertisements', false,
-        'ai_chatbot', true
-    )
+    0
+),
+(
+    'PERSONAL',
+    'Personal',
+    'Personal health and wellness plan',
+    'monthly',
+    'monthly',
+    99.00,
+    'INR',
+    0
+),
+(
+    'PREMIUM',
+    'Premium',
+    'Premium health and wellness plan',
+    'monthly',
+    'monthly',
+    499.00,
+    'INR',
+    0
 );
+
+INSERT INTO plan_features (plan_id, feature_code, enabled)
+SELECT plans.id, features.feature_code, features.enabled
+FROM subscription_plans plans
+JOIN (
+    SELECT 'FREE' AS code, 'essential_nutrition' AS feature_code, TRUE AS enabled UNION ALL
+    SELECT 'FREE', 'meal_tracking', TRUE UNION ALL
+    SELECT 'FREE', 'workout_tracking', TRUE UNION ALL
+    SELECT 'FREE', 'water_tracking', TRUE UNION ALL
+    SELECT 'FREE', 'sleep_tracking', TRUE UNION ALL
+    SELECT 'FREE', 'smart_reminders', TRUE UNION ALL
+    SELECT 'FREE', 'daily_goals', TRUE UNION ALL
+    SELECT 'FREE', 'weekly_goals', TRUE UNION ALL
+    SELECT 'FREE', 'monthly_goals', TRUE UNION ALL
+    SELECT 'FREE', 'streaks', TRUE UNION ALL
+    SELECT 'FREE', 'achievements', TRUE UNION ALL
+    SELECT 'FREE', 'weekly_health_report', TRUE UNION ALL
+    SELECT 'FREE', 'referral_program', TRUE UNION ALL
+    SELECT 'PERSONAL', 'essential_nutrition', TRUE UNION ALL
+    SELECT 'PERSONAL', 'meal_tracking', TRUE UNION ALL
+    SELECT 'PERSONAL', 'workout_tracking', TRUE UNION ALL
+    SELECT 'PERSONAL', 'water_tracking', TRUE UNION ALL
+    SELECT 'PERSONAL', 'sleep_tracking', TRUE UNION ALL
+    SELECT 'PERSONAL', 'smart_reminders', TRUE UNION ALL
+    SELECT 'PERSONAL', 'daily_goals', TRUE UNION ALL
+    SELECT 'PERSONAL', 'weekly_goals', TRUE UNION ALL
+    SELECT 'PERSONAL', 'monthly_goals', TRUE UNION ALL
+    SELECT 'PERSONAL', 'streaks', TRUE UNION ALL
+    SELECT 'PERSONAL', 'achievements', TRUE UNION ALL
+    SELECT 'PERSONAL', 'weekly_health_report', TRUE UNION ALL
+    SELECT 'PERSONAL', 'referral_program', TRUE UNION ALL
+    SELECT 'PERSONAL', 'ai_meal_planning', TRUE UNION ALL
+    SELECT 'PERSONAL', 'personalized_workout', TRUE UNION ALL
+    SELECT 'PERSONAL', 'location_food_preference', TRUE UNION ALL
+    SELECT 'PERSONAL', 'advanced_ai_insights', TRUE UNION ALL
+    SELECT 'PREMIUM', 'essential_nutrition', TRUE UNION ALL
+    SELECT 'PREMIUM', 'meal_tracking', TRUE UNION ALL
+    SELECT 'PREMIUM', 'workout_tracking', TRUE UNION ALL
+    SELECT 'PREMIUM', 'water_tracking', TRUE UNION ALL
+    SELECT 'PREMIUM', 'sleep_tracking', TRUE UNION ALL
+    SELECT 'PREMIUM', 'smart_reminders', TRUE UNION ALL
+    SELECT 'PREMIUM', 'daily_goals', TRUE UNION ALL
+    SELECT 'PREMIUM', 'weekly_goals', TRUE UNION ALL
+    SELECT 'PREMIUM', 'monthly_goals', TRUE UNION ALL
+    SELECT 'PREMIUM', 'streaks', TRUE UNION ALL
+    SELECT 'PREMIUM', 'achievements', TRUE UNION ALL
+    SELECT 'PREMIUM', 'weekly_health_report', TRUE UNION ALL
+    SELECT 'PREMIUM', 'referral_program', TRUE UNION ALL
+    SELECT 'PREMIUM', 'ai_meal_planning', TRUE UNION ALL
+    SELECT 'PREMIUM', 'personalized_workout', TRUE UNION ALL
+    SELECT 'PREMIUM', 'location_food_preference', TRUE UNION ALL
+    SELECT 'PREMIUM', 'advanced_ai_insights', TRUE UNION ALL
+    SELECT 'PREMIUM', 'ai_food_scanner', TRUE UNION ALL
+    SELECT 'PREMIUM', 'workout_songs', TRUE UNION ALL
+    SELECT 'PREMIUM', 'advanced_health_reports', TRUE UNION ALL
+    SELECT 'PREMIUM', 'ad_free', TRUE
+) features ON features.code = plans.code;
 
 
 -- ============================================================

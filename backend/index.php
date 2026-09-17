@@ -51,6 +51,15 @@ $authRoutes = [
 	'POST /api/v1/health/sleep' => __DIR__ . '/api/v1/health/sleep.php',
 	'GET /api/v1/health/sleep' => __DIR__ . '/api/v1/health/sleep.php',
 	'GET /api/v1/health/today' => __DIR__ . '/api/v1/health/today.php',
+	'GET /api/v1/subscription/plans' => __DIR__ . '/api/v1/subscription/plans.php',
+	'GET /api/v1/subscription/current' => __DIR__ . '/api/v1/subscription/status.php',
+	'GET /api/v1/subscription/features' => __DIR__ . '/api/v1/subscription/features.php',
+	'POST /api/v1/subscription/create' => __DIR__ . '/api/v1/subscription/create.php',
+	'POST /api/v1/subscription/verify' => __DIR__ . '/api/v1/subscription/verify.php',
+	'POST /api/v1/subscription/cancel' => __DIR__ . '/api/v1/subscription/cancel.php',
+	'GET /api/v1/subscription/checkout' => __DIR__ . '/api/v1/subscription/checkout.php',
+	'POST /api/v1/subscription/checkout/complete' => __DIR__ . '/api/v1/subscription/checkout-complete.php',
+	'POST /api/v1/webhooks/razorpay' => __DIR__ . '/api/v1/webhooks/razorpay.php',
 ];
 
 $route = $method . ' ' . rtrim($path, '/');
