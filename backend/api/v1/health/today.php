@@ -7,6 +7,7 @@ if (!function_exists('response_error')) {
 }
 require_once dirname(__DIR__, 3) . '/core/auth.php';
 require_once dirname(__DIR__, 3) . '/services/HealthTrackingService.php';
+require_once dirname(__DIR__, 3) . '/models/SleepLog.php';
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
 	response_error('METHOD_NOT_ALLOWED', 'Method not allowed.', 405);
@@ -15,6 +16,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
 $user = authenticated_user();
 $userId = (int) $user['id'];
 $database = database_connection();
+$sleepTimezone = SleepLog::timezone($database, $userId);
 $nutrition = HealthTrackingService::nutritionSummary($database, $userId);
 [$today, $tomorrow] = HealthTrackingService::todayBounds();
 $start = $today->format('Y-m-d H:i:s');
@@ -33,20 +35,7 @@ $workoutStatement = $database->prepare('SELECT COALESCE(SUM(duration_minutes), 0
 $workoutStatement->execute(['user_id' => $userId, 'start' => $start, 'end' => $end]);
 $workout = $workoutStatement->fetch();
 
-$sleepStatement = $database->prepare('SELECT sleep_start, sleep_end, duration_minutes FROM sleep_logs WHERE user_id = :user_id AND sleep_start >= :start AND sleep_start < :end ORDER BY sleep_start DESC, id DESC LIMIT 1');
-$sleepStatement->execute(['user_id' => $userId, 'start' => $start, 'end' => $end]);
-$sleepRow = $sleepStatement->fetch();
-$sleep = ['duration_minutes' => 0, 'bedtime' => null, 'wake_time' => null];
-if ($sleepRow) {
-	$timezone = new DateTimeZone(HealthTrackingService::TIMEZONE);
-	$sleepStart = new DateTimeImmutable($sleepRow['sleep_start'], $timezone);
-	$sleepEnd = new DateTimeImmutable($sleepRow['sleep_end'], $timezone);
-	$sleep = [
-		'duration_minutes' => (int) $sleepRow['duration_minutes'],
-		'bedtime' => $sleepStart->format('H:i:s'),
-		'wake_time' => $sleepEnd->format('H:i:s'),
-	];
-}
+$sleep = SleepLog::today($database, $userId, $sleepTimezone) ?? ['duration_minutes' => 0, 'bedtime' => null, 'wake_time' => null];
 
 response_success([
 	'date' => $today->format('Y-m-d'),

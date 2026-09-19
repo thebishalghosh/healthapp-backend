@@ -7,12 +7,15 @@ if (!function_exists('response_error')) {
 }
 require_once dirname(__DIR__, 3) . '/core/auth.php';
 require_once dirname(__DIR__, 3) . '/models/Reminder.php';
+require_once dirname(__DIR__, 3) . '/services/EntitlementService.php';
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
 	response_error('METHOD_NOT_ALLOWED', 'Method not allowed.', 405);
 }
 
 $user = authenticated_user();
+$database = database_connection();
+EntitlementService::requireFeature($database, (int) $user['id'], 'reminders');
 $body = auth_json_body();
 $fields = Reminder::validate($body);
 if ($fields !== []) {
@@ -20,7 +23,7 @@ if ($fields !== []) {
 }
 
 try {
-	$reminder = Reminder::create(database_connection(), (int) $user['id'], $body);
+	$reminder = Reminder::create($database, (int) $user['id'], $body);
 	response_success(['reminder' => $reminder], 'Reminder created.', 201);
 } catch (Throwable $exception) {
 	error_log(sprintf('[%s] Reminder creation failed: %s', request_id(), $exception->getMessage()));

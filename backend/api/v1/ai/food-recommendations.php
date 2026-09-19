@@ -10,6 +10,7 @@ require_once dirname(__DIR__, 3) . '/services/HealthTrackingService.php';
 require_once dirname(__DIR__, 3) . '/services/GeminiService.php';
 require_once dirname(__DIR__, 3) . '/services/AIUsageService.php';
 require_once dirname(__DIR__, 3) . '/services/FoodRecommendationHistoryService.php';
+require_once dirname(__DIR__, 3) . '/services/EntitlementService.php';
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
 	response_error('METHOD_NOT_ALLOWED', 'Method not allowed.', 405);
@@ -18,6 +19,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
 $user = authenticated_user();
 $userId = (int) $user['id'];
 $database = database_connection();
+EntitlementService::requireFeature($database, $userId, 'ai_food_recommendations');
 $body = trim((string) file_get_contents('php://input'));
 $request = $body === '' ? [] : json_decode($body, true);
 

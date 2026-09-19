@@ -7,12 +7,15 @@ if (!function_exists('response_error')) {
 }
 require_once dirname(__DIR__, 3) . '/core/auth.php';
 require_once dirname(__DIR__, 3) . '/services/FoodRecommendationHistoryService.php';
+require_once dirname(__DIR__, 3) . '/services/EntitlementService.php';
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
 	response_error('METHOD_NOT_ALLOWED', 'Method not allowed.', 405);
 }
 
 $user = authenticated_user();
+$database = database_connection();
+EntitlementService::requireFeature($database, (int) $user['id'], 'ai_food_recommendations');
 $limit = filter_var($_GET['limit'] ?? 20, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 100]]);
 $offset = filter_var($_GET['offset'] ?? 0, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
 if ($limit === false || $offset === false) {
@@ -20,7 +23,7 @@ if ($limit === false || $offset === false) {
 }
 
 try {
-	$history = FoodRecommendationHistoryService::history(database_connection(), (int) $user['id'], $limit, $offset);
+	$history = FoodRecommendationHistoryService::history($database, (int) $user['id'], $limit, $offset);
 } catch (Throwable $exception) {
 	error_log(sprintf('[%s] AI recommendation history failed: %s', request_id(), $exception->getMessage()));
 	response_error('INTERNAL_ERROR', 'Recommendation history could not be retrieved.', 500);

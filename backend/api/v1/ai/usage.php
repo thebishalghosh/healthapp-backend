@@ -6,6 +6,7 @@ if (!function_exists('response_error')) {
 	require_once dirname(__DIR__, 3) . '/bootstrap.php';
 }
 require_once dirname(__DIR__, 3) . '/core/auth.php';
+require_once dirname(__DIR__, 3) . '/services/EntitlementService.php';
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
 	response_error('METHOD_NOT_ALLOWED', 'Method not allowed.', 405);
@@ -13,6 +14,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
 
 $user = authenticated_user();
 $database = database_connection();
+EntitlementService::requireFeature($database, (int) $user['id'], 'ai_food_recommendations');
 
 try {
 	$statement = $database->prepare(

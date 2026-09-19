@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 final class Reminder
 {
-	public const TYPES = ['water', 'meal', 'workout', 'sleep'];
+	public const TYPES = ['water', 'meal', 'workout', 'sleep', 'custom'];
 	public const REPEAT_TYPES = ['once', 'daily', 'weekly', 'custom'];
 	public const SOURCES = ['manual', 'reminder'];
 
@@ -19,7 +19,7 @@ final class Reminder
 		$endDate = $data['end_date'] ?? null;
 
 		if (!in_array($reminderType, self::TYPES, true)) {
-			$fields['reminder_type'] = 'Reminder type must be water, meal, workout, or sleep.';
+			$fields['reminder_type'] = 'Reminder type must be water, meal, workout, sleep, or custom.';
 		}
 		if ($title === '' || strlen($title) > 191) {
 			$fields['title'] = 'Title must be 1 to 191 characters.';
@@ -51,6 +51,12 @@ final class Reminder
 						$fields['repeat_days'] = 'Repeat days must be a unique array of weekday numbers from 0 to 6.';
 						break;
 					}
+				}
+				if (in_array($repeatType, ['weekly', 'custom'], true) && (!isset($data['repeat_days']) || !is_array($data['repeat_days']) || $data['repeat_days'] === [])) {
+					$fields['repeat_days'] = 'Select at least one weekday for weekly or custom reminders.';
+				}
+				if (in_array($repeatType, ['once', 'daily'], true) && array_key_exists('repeat_days', $data) && $data['repeat_days'] !== null && $data['repeat_days'] !== []) {
+					$fields['repeat_days'] = 'Weekdays are only supported for weekly or custom reminders.';
 				}
 			}
 		}
@@ -106,6 +112,11 @@ final class Reminder
 		$statement = $database->prepare('DELETE FROM reminders WHERE id = :id AND user_id = :user_id');
 		$statement->execute(['id' => $id, 'user_id' => $userId]);
 		return $statement->rowCount() > 0;
+	}
+
+	public static function find(PDO $database, int $userId, int $id): ?array
+	{
+		return self::findOwned($database, $userId, $id);
 	}
 
 	private static function findOwned(PDO $database, int $userId, int $id): ?array

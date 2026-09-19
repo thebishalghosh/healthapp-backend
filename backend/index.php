@@ -48,12 +48,21 @@ $authRoutes = [
 	'GET /api/v1/health/streak' => __DIR__ . '/api/v1/health/streak.php',
 	'GET /api/v1/reminders' => __DIR__ . '/api/v1/reminders/list.php',
 	'POST /api/v1/reminders' => __DIR__ . '/api/v1/reminders/create.php',
+	'GET /api/v1/notifications' => __DIR__ . '/api/v1/notifications/list.php',
+	'PATCH /api/v1/notifications/read' => __DIR__ . '/api/v1/notifications/read.php',
+	'POST /api/v1/notifications/device' => __DIR__ . '/api/v1/notifications/register-device.php',
+	'GET /api/v1/user/settings' => __DIR__ . '/api/v1/user/settings.php',
+	'PUT /api/v1/user/settings' => __DIR__ . '/api/v1/user/update-settings.php',
 	'POST /api/v1/health/sleep' => __DIR__ . '/api/v1/health/sleep.php',
 	'GET /api/v1/health/sleep' => __DIR__ . '/api/v1/health/sleep.php',
+	'PUT /api/v1/health/sleep' => __DIR__ . '/api/v1/health/sleep.php',
+	'DELETE /api/v1/health/sleep' => __DIR__ . '/api/v1/health/sleep.php',
+	'GET /api/v1/health/sleep/history' => __DIR__ . '/api/v1/health/sleep-history.php',
 	'GET /api/v1/health/today' => __DIR__ . '/api/v1/health/today.php',
 	'GET /api/v1/subscription/plans' => __DIR__ . '/api/v1/subscription/plans.php',
 	'GET /api/v1/subscription/current' => __DIR__ . '/api/v1/subscription/status.php',
 	'GET /api/v1/subscription/features' => __DIR__ . '/api/v1/subscription/features.php',
+	'GET /api/v1/subscription/entitlements' => __DIR__ . '/api/v1/subscription/entitlements.php',
 	'POST /api/v1/subscription/create' => __DIR__ . '/api/v1/subscription/create.php',
 	'POST /api/v1/subscription/verify' => __DIR__ . '/api/v1/subscription/verify.php',
 	'POST /api/v1/subscription/cancel' => __DIR__ . '/api/v1/subscription/cancel.php',
@@ -69,9 +78,9 @@ if (isset($authRoutes[$route])) {
 	exit;
 }
 
-if (preg_match('#^/api/v1/reminders/([1-9][0-9]*)$#', rtrim($path, '/'), $matches) === 1 && in_array($method, ['PUT', 'DELETE'], true)) {
+if (preg_match('#^/api/v1/reminders/([1-9][0-9]*)$#', rtrim($path, '/'), $matches) === 1 && in_array($method, ['PUT', 'PATCH', 'DELETE'], true)) {
 	$_GET['id'] = $matches[1];
-	require __DIR__ . '/api/v1/reminders/' . ($method === 'PUT' ? 'update.php' : 'delete.php');
+	require __DIR__ . '/api/v1/reminders/' . ($method === 'PUT' || $method === 'PATCH' ? 'update.php' : 'delete.php');
 	exit;
 }
 
