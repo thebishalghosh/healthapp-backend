@@ -1,6 +1,6 @@
 {
 	"name": "health-app/backend",
-	"description": "AI Health and Wellness application backend",
+	"description": "Life Logic application backend",
 	"type": "project",
 	"require": {
 		"php": ">=8.2"

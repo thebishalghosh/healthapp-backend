@@ -7,6 +7,7 @@ if (!function_exists('response_error')) {
 }
 require_once dirname(__DIR__, 3) . '/core/auth.php';
 require_once dirname(__DIR__, 3) . '/services/HealthTrackingService.php';
+require_once dirname(__DIR__, 3) . '/services/HealthScoreService.php';
 require_once dirname(__DIR__, 3) . '/models/SleepLog.php';
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
@@ -18,33 +19,24 @@ $userId = (int) $user['id'];
 $database = database_connection();
 $sleepTimezone = SleepLog::timezone($database, $userId);
 $nutrition = HealthTrackingService::nutritionSummary($database, $userId);
-[$today, $tomorrow] = HealthTrackingService::todayBounds();
-$start = $today->format('Y-m-d H:i:s');
-$end = $tomorrow->format('Y-m-d H:i:s');
-
-$foodStatement = $database->prepare('SELECT COALESCE(SUM(calories), 0) AS calories, COALESCE(SUM(protein_g), 0) AS protein_g, COALESCE(SUM(carbohydrates_g), 0) AS carbohydrates_g, COALESCE(SUM(fat_g), 0) AS fat_g FROM meal_logs WHERE user_id = :user_id AND consumed_at >= :start AND consumed_at < :end');
-$foodStatement->execute(['user_id' => $userId, 'start' => $start, 'end' => $end]);
-$food = $foodStatement->fetch();
-
-$waterStatement = $database->prepare('SELECT COALESCE(SUM(amount_ml), 0) AS consumed_ml FROM water_logs WHERE user_id = :user_id AND consumed_at >= :start AND consumed_at < :end');
-$waterStatement->execute(['user_id' => $userId, 'start' => $start, 'end' => $end]);
-$waterConsumed = (float) $waterStatement->fetch()['consumed_ml'];
-$waterTarget = $nutrition === null ? null : (float) $nutrition['water_ml'];
-
-$workoutStatement = $database->prepare('SELECT COALESCE(SUM(duration_minutes), 0) AS duration_minutes, COALESCE(SUM(calories_burned), 0) AS calories_burned FROM workout_logs WHERE user_id = :user_id AND workout_date >= :start AND workout_date < :end');
-$workoutStatement->execute(['user_id' => $userId, 'start' => $start, 'end' => $end]);
-$workout = $workoutStatement->fetch();
-
-$sleep = SleepLog::today($database, $userId, $sleepTimezone) ?? ['duration_minutes' => 0, 'bedtime' => null, 'wake_time' => null];
+$today = new DateTimeImmutable('today', $sleepTimezone);
+$summary = HealthScoreService::dailySummary($database, $userId, $today, $sleepTimezone, $nutrition);
+$food = $summary['food'];
+$waterConsumed = $summary['water']['consumed_ml'];
+$waterTarget = $nutrition === null || !is_numeric($nutrition['water_ml'] ?? null)
+	? null
+	: (float) $nutrition['water_ml'];
+$workout = $summary['workout'];
+$sleep = $summary['sleep'] ?? ['duration_minutes' => 0, 'bedtime' => null, 'wake_time' => null];
 
 response_success([
-	'date' => $today->format('Y-m-d'),
+	'date' => $summary['date'],
 	'nutrition' => [
-		'calories_target' => $nutrition === null ? null : (float) $nutrition['calories_target'],
-		'calories_consumed' => round((float) $food['calories'], 2),
-		'protein_g' => round((float) $food['protein_g'], 2),
-		'carbohydrates_g' => round((float) $food['carbohydrates_g'], 2),
-		'fat_g' => round((float) $food['fat_g'], 2),
+		'calories_target' => $nutrition === null || !is_numeric($nutrition['calories_target'] ?? null) ? null : (float) $nutrition['calories_target'],
+		'calories_consumed' => round($food['calories'], 2),
+		'protein_g' => round($food['protein_g'], 2),
+		'carbohydrates_g' => round($food['carbohydrates_g'], 2),
+		'fat_g' => round($food['fat_g'], 2),
 	],
 	'water' => [
 		'target_ml' => $waterTarget === null ? null : round($waterTarget, 2),
@@ -53,8 +45,9 @@ response_success([
 		'percentage' => $waterTarget === null ? null : round($waterTarget > 0 ? min(100, ($waterConsumed / $waterTarget) * 100) : 0, 2),
 	],
 	'workout' => [
-		'duration_minutes' => (int) $workout['duration_minutes'],
-		'calories_burned' => round((float) $workout['calories_burned'], 2),
+		'duration_minutes' => $workout['duration_minutes'],
+		'calories_burned' => round($workout['calories_burned'], 2),
 	],
 	'sleep' => $sleep,
+	'health_score' => $summary['health_score'],
 ], 'Daily health summary retrieved.');

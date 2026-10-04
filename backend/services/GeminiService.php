@@ -2,12 +2,87 @@
 
 declare(strict_types=1);
 
+final class GeminiResponseException extends RuntimeException
+{
+}
+
 final class GeminiService
 {
 	public static function generateFoodRecommendations(array $context, ?string $mealType = null): array
 	{
 		$prompt = self::buildPrompt($context, $mealType);
 		return self::parseResponse(self::sendRequest($prompt, true));
+	}
+
+	public static function detectFoodsFromImage(string $imageData, string $mimeType): array
+	{
+		$prompt = <<<'PROMPT'
+Analyze the provided food photograph. Identify all clearly visible food items and do not invent foods that are not reasonably visible. Estimate the edible quantity in grams or millilitres where possible. Quantities are visual estimates, not exact measurements. Indicate uncertainty through confidence values and notes. If an item's quantity cannot be reasonably estimated, use null for quantity_g and "unknown" for quantity_unit. If no food can be confidently identified, return an empty foods array and explain the uncertainty in notes. Do not calculate or return calories, protein, carbohydrates, fat, fiber, or any other nutrition values. Return only JSON matching the required schema, with no markdown or extra fields.
+PROMPT;
+		$schema = [
+			'type' => 'OBJECT',
+			'properties' => [
+				'foods' => [
+					'type' => 'ARRAY',
+					'items' => [
+						'type' => 'OBJECT',
+						'properties' => [
+							'name' => ['type' => 'STRING'],
+							'quantity_g' => ['type' => 'NUMBER', 'nullable' => true],
+							'quantity_unit' => ['type' => 'STRING', 'enum' => ['g', 'ml', 'unknown']],
+							'confidence' => ['type' => 'NUMBER'],
+						],
+						'required' => ['name', 'quantity_g', 'quantity_unit', 'confidence'],
+					],
+				],
+				'overall_confidence' => ['type' => 'NUMBER'],
+				'notes' => ['type' => 'ARRAY', 'items' => ['type' => 'STRING']],
+			],
+			'required' => ['foods', 'overall_confidence', 'notes'],
+		];
+
+		return self::parseFoodScanResponse(self::sendRequest($prompt, true, $imageData, $mimeType, $schema));
+	}
+
+	public static function selectCatalogCandidates(
+		array $selectionItems,
+		?string $imageData,
+		?string $mimeType
+	): array {
+		$schema = [
+			'type' => 'OBJECT',
+			'properties' => [
+				'selections' => [
+					'type' => 'ARRAY',
+					'items' => [
+						'type' => 'OBJECT',
+						'properties' => [
+							'detection_index' => ['type' => 'INTEGER'],
+							'catalog_food_id' => ['type' => 'INTEGER', 'nullable' => true],
+							'confidence' => ['type' => 'NUMBER'],
+						],
+						'required' => ['detection_index', 'catalog_food_id', 'confidence'],
+					],
+				],
+			],
+			'required' => ['selections'],
+		];
+		$prompt = <<<'PROMPT'
+Select a catalog candidate for each detected food only when the supplied food name and image support a confident match. The image may be used only to distinguish the listed candidates. Do not select a food based on a broad category such as rice, chicken, lentils, vegetables, or curry. If the visible food or its preparation does not clearly distinguish a candidate, return a null catalog_food_id and low confidence. Return one selection for every detection_index. Use only catalog_food_id values from that detection's supplied candidates. Never invent an ID and never return nutrition, calories, macros, or any other fields. Return only JSON matching the required schema.
+
+Detections and their allowed candidates:
+PROMPT;
+		$payload = json_encode($selectionItems, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+
+		$response = self::sendRequest(
+			$prompt . "\n" . $payload,
+			true,
+			$imageData,
+			$mimeType,
+			$schema
+		);
+
+		return self::parseCatalogSelectionResponse($response, $selectionItems);
 	}
 
 	public static function testConnection(): string
@@ -24,7 +99,7 @@ final class GeminiService
 		return self::text($text, 1000);
 	}
 
-	private static function sendRequest(string $prompt, bool $jsonResponse): string
+	private static function sendRequest(string $prompt, bool $jsonResponse, ?string $imageData = null, ?string $imageMimeType = null, ?array $responseSchema = null): string
 	{
 		$apiKey = trim((string) app_config('GEMINI_API_KEY', ''));
 		$model = trim((string) app_config('GEMINI_MODEL', ''));
@@ -39,7 +114,7 @@ final class GeminiService
 		$generationConfig = ['temperature' => 0.4];
 		if ($jsonResponse) {
 			$generationConfig['responseMimeType'] = 'application/json';
-			$generationConfig['responseSchema'] = [
+			$generationConfig['responseSchema'] = $responseSchema ?? [
 				'type' => 'ARRAY',
 				'items' => [
 					'type' => 'OBJECT',
@@ -73,8 +148,12 @@ final class GeminiService
 			];
 		}
 
+		$parts = [['text' => $prompt]];
+		if ($imageData !== null && $imageMimeType !== null) {
+			$parts[] = ['inlineData' => ['mimeType' => $imageMimeType, 'data' => base64_encode($imageData)]];
+		}
 		$payload = json_encode([
-			'contents' => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
+			'contents' => [['role' => 'user', 'parts' => $parts]],
 			'generationConfig' => $generationConfig,
 		], JSON_THROW_ON_ERROR);
 
@@ -100,14 +179,20 @@ final class GeminiService
 			]);
 			$rawResponse = curl_exec($curl);
 			$curlError = curl_error($curl);
+			$curlErrorNumber = curl_errno($curl);
 			$status = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
 			$headerSize = (int) curl_getinfo($curl, CURLINFO_HEADER_SIZE);
 			curl_close($curl);
 
 			$lastStatus = $status > 0 ? $status : null;
-			if ($rawResponse === false || $curlError !== '') {
-				$exceptionMessage = $curlError === '' ? 'Gemini request failed.' : 'Gemini request failed (cURL error: ' . $curlError . ').';
-				throw new RuntimeException($exceptionMessage);
+			if ($rawResponse === false || $curlErrorNumber !== CURLE_OK) {
+				$curlErrorDescription = $curlError === '' ? 'unknown transport failure' : $curlError;
+				if (!self::isTransientCurlError($curlErrorNumber) || $attempt >= $maxAttempts) {
+					throw new RuntimeException('Gemini cURL error ' . $curlErrorNumber . ' (' . $curlErrorDescription . ').');
+				}
+
+				usleep((int) (min($maxRetryDelaySeconds, 0.5 * $attempt) * 1_000_000));
+				continue;
 			}
 
 			$responseHeaders = substr((string) $rawResponse, 0, $headerSize);
@@ -191,6 +276,20 @@ final class GeminiService
 		$detail = $lastStatus === null ? 'unknown transport failure' : 'HTTP ' . $lastStatus . ' (' . $lastErrorStatus . ')';
 		$exceptionMessage = 'Gemini request failed after ' . $maxAttempts . ' attempts (' . $detail . ').';
 		throw new RuntimeException($exceptionMessage);
+	}
+
+	private static function isTransientCurlError(int $errorNumber): bool
+	{
+		return in_array($errorNumber, [
+			CURLE_OPERATION_TIMEDOUT,
+			CURLE_COULDNT_CONNECT,
+			CURLE_COULDNT_RESOLVE_HOST,
+			CURLE_COULDNT_RESOLVE_PROXY,
+			CURLE_RECV_ERROR,
+			CURLE_SEND_ERROR,
+			CURLE_GOT_NOTHING,
+			CURLE_PARTIAL_FILE,
+		], true);
 	}
 
 	private static function buildPrompt(array $context, ?string $mealType): string
@@ -280,6 +379,122 @@ PROMPT;
 		}
 
 		return $normalized;
+	}
+
+	private static function parseFoodScanResponse(string $responseBody): array
+	{
+		$decoded = json_decode($responseBody, true);
+		$text = $decoded['candidates'][0]['content']['parts'][0]['text'] ?? null;
+		$finishReason = $decoded['candidates'][0]['finishReason'] ?? null;
+
+		if ($finishReason === 'SAFETY' || !is_string($text) || trim($text) === '') {
+			throw new GeminiResponseException('Gemini did not return usable food detection results.');
+		}
+
+		$result = json_decode(trim($text), true);
+		if (!is_array($result) || !is_array($result['foods'] ?? null) || !is_numeric($result['overall_confidence'] ?? null) || !is_array($result['notes'] ?? null)) {
+			throw new GeminiResponseException('Gemini returned malformed food detection results.');
+		}
+
+		$overallConfidence = (float) $result['overall_confidence'];
+		if (!is_finite($overallConfidence) || $overallConfidence < 0 || $overallConfidence > 1) {
+			throw new GeminiResponseException('Gemini returned invalid food detection confidence.');
+		}
+
+		$foods = [];
+		foreach ($result['foods'] as $food) {
+			if (!is_array($food) || !is_string($food['name'] ?? null) || !is_string($food['quantity_unit'] ?? null) || !is_numeric($food['confidence'] ?? null)) {
+				throw new GeminiResponseException('Gemini returned malformed food items.');
+			}
+			$quantity = $food['quantity_g'] ?? null;
+			$confidence = (float) $food['confidence'];
+			if (($quantity !== null && (!is_numeric($quantity) || !is_finite((float) $quantity) || (float) $quantity < 0)) || !in_array($food['quantity_unit'], ['g', 'ml', 'unknown'], true) || !is_finite($confidence) || $confidence < 0 || $confidence > 1) {
+				throw new GeminiResponseException('Gemini returned invalid food item estimates.');
+			}
+			$foods[] = [
+				'name' => self::foodScanText($food['name']),
+				'quantity_g' => $quantity === null ? null : round((float) $quantity, 2),
+				'quantity_unit' => $food['quantity_unit'],
+				'confidence' => round($confidence, 4),
+			];
+		}
+
+		$notes = [];
+		foreach ($result['notes'] as $note) {
+			if (!is_string($note)) {
+				throw new GeminiResponseException('Gemini returned malformed food detection notes.');
+			}
+			$notes[] = self::foodScanText($note);
+		}
+
+		return [
+			'foods' => $foods,
+			'overall_confidence' => round($overallConfidence, 4),
+			'notes' => $notes,
+		];
+	}
+
+	private static function parseCatalogSelectionResponse(string $responseBody, array $selectionItems): array
+	{
+		$decoded = json_decode($responseBody, true);
+		$text = $decoded['candidates'][0]['content']['parts'][0]['text'] ?? null;
+		$finishReason = $decoded['candidates'][0]['finishReason'] ?? null;
+		if ($finishReason === 'SAFETY' || !is_string($text) || trim($text) === '') {
+			throw new GeminiResponseException('Gemini did not return usable catalog selections.');
+		}
+
+		$result = json_decode(trim($text), true);
+		if (!is_array($result) || array_keys($result) !== ['selections'] || !is_array($result['selections'])) {
+			throw new GeminiResponseException('Gemini returned malformed catalog selections.');
+		}
+
+		$expectedIndexes = [];
+		foreach ($selectionItems as $item) {
+			if (!is_array($item) || !is_int($item['detection_index'] ?? null) || !is_array($item['candidates'] ?? null)) {
+				throw new GeminiResponseException('Catalog selection request was malformed.');
+			}
+			$expectedIndexes[$item['detection_index']] = true;
+		}
+
+		$selections = [];
+		foreach ($result['selections'] as $selection) {
+			if (!is_array($selection)
+				|| count($selection) !== 3
+				|| !array_key_exists('detection_index', $selection)
+				|| !array_key_exists('catalog_food_id', $selection)
+				|| !array_key_exists('confidence', $selection)
+				|| !is_int($selection['detection_index'])
+				|| !array_key_exists($selection['detection_index'], $expectedIndexes)
+				|| array_key_exists($selection['detection_index'], $selections)
+				|| ($selection['catalog_food_id'] !== null && (!is_int($selection['catalog_food_id']) || $selection['catalog_food_id'] < 1))
+				|| !is_numeric($selection['confidence'])
+				|| !is_finite((float) $selection['confidence'])
+				|| (float) $selection['confidence'] < 0
+				|| (float) $selection['confidence'] > 1) {
+				throw new GeminiResponseException('Gemini returned invalid catalog selection fields.');
+			}
+
+			$selections[$selection['detection_index']] = [
+				'catalog_food_id' => $selection['catalog_food_id'],
+				'confidence' => round((float) $selection['confidence'], 4),
+			];
+		}
+
+		if (count($selections) !== count($expectedIndexes)) {
+			throw new GeminiResponseException('Gemini returned incomplete catalog selections.');
+		}
+
+		return $selections;
+	}
+
+	private static function foodScanText(string $value, int $maxLength = 500): string
+	{
+		$value = trim(preg_replace('/[\x00-\x1F\x7F]/', '', $value) ?? '');
+		if ($value === '' || strlen($value) > $maxLength) {
+			throw new GeminiResponseException('Gemini returned invalid food detection text.');
+		}
+
+		return $value;
 	}
 
 	private static function text(string $value, int $maxLength = 500): string
