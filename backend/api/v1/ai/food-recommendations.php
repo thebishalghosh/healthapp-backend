@@ -11,6 +11,8 @@ require_once dirname(__DIR__, 3) . '/services/GeminiService.php';
 require_once dirname(__DIR__, 3) . '/services/AIUsageService.php';
 require_once dirname(__DIR__, 3) . '/services/FoodRecommendationHistoryService.php';
 require_once dirname(__DIR__, 3) . '/services/EntitlementService.php';
+require_once dirname(__DIR__, 3) . '/services/FoodLocationService.php';
+require_once dirname(__DIR__, 3) . '/services/HealthMedicalProfileService.php';
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
 	response_error('METHOD_NOT_ALLOWED', 'Method not allowed.', 405);
@@ -20,6 +22,10 @@ $user = authenticated_user();
 $userId = (int) $user['id'];
 $database = database_connection();
 EntitlementService::requireFeature($database, $userId, 'ai_food_recommendations');
+$foodLocation = FoodLocationService::get($database, $userId);
+if ($foodLocation === null) {
+	response_error('FOOD_LOCATION_NOT_CONFIGURED', 'Set your country and region before requesting food recommendations.', 409);
+}
 $body = trim((string) file_get_contents('php://input'));
 $request = $body === '' ? [] : json_decode($body, true);
 
@@ -42,7 +48,7 @@ if ($fields !== []) {
 }
 
 $profileStatement = $database->prepare(
-	'SELECT first_name, date_of_birth, gender, height_cm, weight_kg, activity_level, fitness_goal
+	'SELECT first_name, date_of_birth, gender, height_cm, weight_kg, activity_level, fitness_goal, dietary_preference
 	 FROM user_profiles WHERE user_id = :user_id LIMIT 1'
 );
 $profileStatement->execute(['user_id' => $userId]);
@@ -102,6 +108,35 @@ foreach (array_keys($consumed) as $field) {
 	$remaining[$field] = round($targets[$field] - $consumed[$field], 2);
 }
 
+$healthProfileTables = $database->prepare(
+	'SELECT COUNT(*) FROM information_schema.tables
+	 WHERE table_schema = DATABASE()
+	   AND table_name IN (:profile_table, :allergy_table, :consent_table)'
+);
+$healthProfileTables->execute([
+	'profile_table' => 'user_health_profiles',
+	'allergy_table' => 'user_allergies',
+	'consent_table' => 'user_health_consents',
+]);
+$foodAllergies = [];
+if ((int) $healthProfileTables->fetchColumn() === 3) {
+	$foodAllergies = array_map(
+		static fn (string $allergy): string => $sanitizeText($allergy, 150),
+		HealthMedicalProfileService::consentedFoodAllergies($database, $userId)
+	);
+}
+
+$dietaryPreferencesStatement = $database->prepare(
+	'SELECT food_name FROM food_preferences
+	 WHERE user_id = :user_id AND preference_type IN (:diet, :restriction)
+	 ORDER BY id LIMIT 50'
+);
+$dietaryPreferencesStatement->execute(['user_id' => $userId, 'diet' => 'diet', 'restriction' => 'restriction']);
+$storedDietaryPreferences = array_map(
+	static fn (array $preference): string => $sanitizeText($preference['food_name'], 191),
+	$dietaryPreferencesStatement->fetchAll()
+);
+
 $context = [
 	'profile' => [
 		'age' => $date->diff($today)->y,
@@ -110,6 +145,17 @@ $context = [
 		'weight_kg' => (float) $profile['weight_kg'],
 		'activity_level' => $sanitizeText($profile['activity_level'], 30),
 		'fitness_goal' => $sanitizeText($profile['fitness_goal'], 30),
+		'dietary_preference' => $sanitizeText($profile['dietary_preference'], 100),
+	],
+	'food_location' => [
+		'country' => $foodLocation['country'],
+		'country_code' => $foodLocation['country_code'],
+		'state' => $foodLocation['state'],
+		'city' => $foodLocation['city'],
+	],
+	'health_constraints' => [
+		'allergies' => $foodAllergies,
+		'dietary_restrictions' => $storedDietaryPreferences,
 	],
 	'nutrition_targets' => $targets,
 	'today_consumed' => $consumed,
@@ -122,12 +168,18 @@ try {
 	$recommendations = GeminiService::generateFoodRecommendations($context, $mealType);
 } catch (Throwable $exception) {
 	$responseTimeMs = isset($startedAt) ? (int) round((hrtime(true) - $startedAt) / 1_000_000) : 0;
+	$validationFailure = $exception instanceof GeminiResponseException;
+	$failureStatus = $validationFailure ? 502 : 503;
+	$failureMessage = $validationFailure ? 'Gemini returned recommendations that failed safety or format checks.' : $exception->getMessage();
 	try {
-		AIUsageService::record($database, $userId, 'gemini', (string) app_config('GEMINI_MODEL', 'unknown'), 'failed', 503, $responseTimeMs, $exception->getMessage());
+		AIUsageService::record($database, $userId, 'gemini', (string) app_config('GEMINI_MODEL', 'unknown'), 'failed', $failureStatus, $responseTimeMs, $failureMessage);
 	} catch (Throwable $usageException) {
 		error_log(sprintf('[%s] AI usage failure logging failed: %s', request_id(), $usageException->getMessage()));
 	}
-	error_log(sprintf('[%s] Gemini food recommendation request failed: %s', request_id(), $exception->getMessage()));
+	error_log(sprintf('[%s] Gemini food recommendation request failed: %s', request_id(), $failureMessage));
+	if ($validationFailure) {
+		response_error('RECOMMENDATIONS_REJECTED', 'Food recommendations could not pass safety or format checks. Please try again later.', 502);
+	}
 	response_error('GEMINI_UNAVAILABLE', 'Food recommendations are temporarily unavailable.', 503);
 }
 

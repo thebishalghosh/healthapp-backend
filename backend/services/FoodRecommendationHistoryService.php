@@ -20,10 +20,12 @@ final class FoodRecommendationHistoryService
 			 (user_id, requested_meal_type, daily_context, generated_by, ai_model)
 			 VALUES (:user_id, :requested_meal_type, :daily_context, :generated_by, :ai_model)'
 		);
+		$historyContext = $context;
+		unset($historyContext['health_constraints']['allergies']);
 		$generation->execute([
 			'user_id' => $userId,
 			'requested_meal_type' => $mealType,
-			'daily_context' => json_encode(array_merge($context, [
+			'daily_context' => json_encode(array_merge($historyContext, [
 				'calorie_target' => $context['nutrition_targets']['calories'] ?? null,
 				'calories_consumed' => $context['today_consumed']['calories'] ?? null,
 				'calories_remaining' => $context['today_remaining']['calories'] ?? null,
@@ -38,8 +40,8 @@ final class FoodRecommendationHistoryService
 		$generationId = (int) $database->lastInsertId();
 		$item = $database->prepare(
 			'INSERT INTO ai_food_recommendations
-			 (generation_id, recommendation_type, title, description, foods, calories, protein_g, carbohydrates_g, fat_g, fiber_g, reason)
-			 VALUES (:generation_id, :recommendation_type, :title, :description, :foods, :calories, :protein_g, :carbohydrates_g, :fat_g, :fiber_g, :reason)'
+			 (generation_id, recommendation_type, title, description, foods, calories, protein_g, carbohydrates_g, fat_g, fiber_g, reason, regional_relevance, preparation_guidance, nutrition_source)
+			 VALUES (:generation_id, :recommendation_type, :title, :description, :foods, :calories, :protein_g, :carbohydrates_g, :fat_g, :fiber_g, :reason, :regional_relevance, :preparation_guidance, :nutrition_source)'
 		);
 
 		foreach ($recommendations as $recommendation) {
@@ -56,6 +58,9 @@ final class FoodRecommendationHistoryService
 				'fat_g' => $nutrition['fat_g'],
 				'fiber_g' => $nutrition['fiber_g'],
 				'reason' => $recommendation['reason'],
+				'regional_relevance' => $recommendation['regional_relevance'],
+				'preparation_guidance' => $recommendation['preparation_guidance'],
+				'nutrition_source' => $recommendation['nutrition_source'],
 			]);
 		}
 
@@ -66,7 +71,8 @@ final class FoodRecommendationHistoryService
 	{
 		$statement = $database->prepare(
 			'SELECT g.id AS generation_id, g.requested_at, g.requested_meal_type, g.daily_context, g.generated_by, g.ai_model,
-					r.id, r.recommendation_type, r.title, r.description, r.foods, r.calories, r.protein_g, r.carbohydrates_g, r.fat_g, r.fiber_g, r.reason
+					r.id, r.recommendation_type, r.title, r.description, r.foods, r.calories, r.protein_g, r.carbohydrates_g, r.fat_g, r.fiber_g, r.reason,
+					r.regional_relevance, r.preparation_guidance, r.nutrition_source
 			 FROM (
 				 SELECT id
 				 FROM ai_food_recommendation_generations
@@ -107,6 +113,9 @@ final class FoodRecommendationHistoryService
 				'title' => $row['title'],
 				'description' => $row['description'],
 				'foods' => json_decode($row['foods'], true),
+				'regional_relevance' => $row['regional_relevance'],
+				'preparation_guidance' => $row['preparation_guidance'],
+				'nutrition_source' => $row['nutrition_source'],
 				'estimated_nutrition' => [
 					'calories' => (float) $row['calories'],
 					'protein_g' => (float) $row['protein_g'],

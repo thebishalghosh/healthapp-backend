@@ -8,10 +8,72 @@ final class GeminiResponseException extends RuntimeException
 
 final class GeminiService
 {
-	public static function generateFoodRecommendations(array $context, ?string $mealType = null): array
+	public static function generateFoodRecommendations(array $context, ?string $mealType = null, ?callable $request = null): array
 	{
 		$prompt = self::buildPrompt($context, $mealType);
-		return self::parseResponse(self::sendRequest($prompt, true));
+		$systemInstruction = 'You are a healthy-food recommendation assistant. Never recommend junk food, fast food, sugary soft drinks, packaged sugary snacks, or highly processed convenience meals. Never recommend pizza, burgers, French fries, potato chips, or deep-fried fast food. Recommend balanced meals from whole foods and locally familiar ingredients and preparation styles for the user-provided country, region, and city. Nutritional quality takes priority over regional authenticity. Respect all listed food allergies. Do not provide diagnosis or treatment advice.';
+		$lastValidationError = null;
+		for ($attempt = 1; $attempt <= 2; $attempt++) {
+			$response = $request !== null
+				? $request($prompt, $attempt, $systemInstruction)
+				: self::sendRequest($prompt, true, null, null, null, $systemInstruction);
+			try {
+				$recommendations = self::parseResponse($response);
+				return self::validateFoodRecommendations($recommendations, $context);
+			} catch (GeminiResponseException $exception) {
+				$lastValidationError = $exception;
+				if ($attempt === 1) {
+					$prompt .= "\nYour previous output failed structure or healthy-food validation. Return a complete corrected response with only healthy, non-processed recommendations; do not include prohibited foods.";
+				}
+			}
+		}
+
+		throw new GeminiResponseException('Gemini recommendations failed structure or healthy-food validation.', 0, $lastValidationError);
+	}
+
+	public static function validateFoodRecommendations(array $recommendations, array $context): array
+	{
+		$allergies = $context['health_constraints']['allergies'] ?? [];
+		if (!is_array($allergies)) {
+			throw new GeminiResponseException('Food allergy context is malformed.');
+		}
+		foreach ($recommendations as $recommendation) {
+			$dishNames = [$recommendation['title']];
+			foreach ($recommendation['foods'] as $food) {
+				$dishNames[] = $food['name'];
+			}
+			$dishText = implode(' ', $dishNames);
+			if (preg_match('/\b(?:pizzas?|burgers?|french\s+fries|fries|potato\s+chips|crisps|soft\s+drinks?|sodas?|colas?|candy\s+bars?|candies|lollipops|donuts?|doughnuts?|instant\s+noodles|instant\s+meal\s+kits|frozen\s+ready\s+meals|fast[\s-]?food|junk\s+food|packaged\s+sugary\s+snacks?|sugary\s+packaged\s+snacks?|highly\s+processed\s+convenience\s+meals?|deep[\s-]?fried)\b/ui', $dishText) === 1) {
+				throw new GeminiResponseException('Recommendation contains a prohibited junk-food item.');
+			}
+			if (preg_match('/\bdeep[\s-]?fried\b/ui', $recommendation['preparation_guidance']) === 1) {
+				throw new GeminiResponseException('Recommendation includes a prohibited deep-fried preparation.');
+			}
+
+			$allRecommendationText = implode(' ', [
+				$recommendation['title'],
+				$recommendation['description'],
+				$dishText,
+				$recommendation['regional_relevance'],
+				$recommendation['preparation_guidance'],
+			]);
+			foreach ($allergies as $allergy) {
+				if (!is_string($allergy) || trim($allergy) === '') {
+					throw new GeminiResponseException('Food allergy context is malformed.');
+				}
+				$quotedAllergy = preg_quote(trim($allergy), '/');
+				if (preg_match('/(?<![\pL\pN])' . $quotedAllergy . '(?![\pL\pN])/iu', $allRecommendationText) === 1) {
+					throw new GeminiResponseException('Recommendation conflicts with a listed food allergy.');
+				}
+			}
+		}
+
+		foreach ($recommendations as &$recommendation) {
+			$recommendation['nutrition_source'] = 'ai_estimate';
+		}
+		unset($recommendation);
+
+		return $recommendations;
 	}
 
 	public static function detectFoodsFromImage(string $imageData, string $mimeType): array
@@ -99,7 +161,14 @@ PROMPT;
 		return self::text($text, 1000);
 	}
 
-	private static function sendRequest(string $prompt, bool $jsonResponse, ?string $imageData = null, ?string $imageMimeType = null, ?array $responseSchema = null): string
+	private static function sendRequest(
+		string $prompt,
+		bool $jsonResponse,
+		?string $imageData = null,
+		?string $imageMimeType = null,
+		?array $responseSchema = null,
+		?string $systemInstruction = null
+	): string
 	{
 		$apiKey = trim((string) app_config('GEMINI_API_KEY', ''));
 		$model = trim((string) app_config('GEMINI_MODEL', ''));
@@ -142,8 +211,10 @@ PROMPT;
 							'required' => ['calories', 'protein_g', 'carbohydrates_g', 'fat_g', 'fiber_g'],
 						],
 						'reason' => ['type' => 'STRING'],
+						'regional_relevance' => ['type' => 'STRING'],
+						'preparation_guidance' => ['type' => 'STRING'],
 					],
-					'required' => ['meal_type', 'title', 'description', 'foods', 'estimated_nutrition', 'reason'],
+					'required' => ['meal_type', 'title', 'description', 'foods', 'estimated_nutrition', 'reason', 'regional_relevance', 'preparation_guidance'],
 				],
 			];
 		}
@@ -152,10 +223,14 @@ PROMPT;
 		if ($imageData !== null && $imageMimeType !== null) {
 			$parts[] = ['inlineData' => ['mimeType' => $imageMimeType, 'data' => base64_encode($imageData)]];
 		}
-		$payload = json_encode([
+		$payloadData = [
 			'contents' => [['role' => 'user', 'parts' => $parts]],
 			'generationConfig' => $generationConfig,
-		], JSON_THROW_ON_ERROR);
+		];
+		if ($systemInstruction !== null) {
+			$payloadData['systemInstruction'] = ['parts' => [['text' => $systemInstruction]]];
+		}
+		$payload = json_encode($payloadData, JSON_THROW_ON_ERROR);
 
 		$maxAttempts = 2;
 		$maxRetryDelaySeconds = 3.0;
@@ -302,7 +377,11 @@ Act as a nutrition recommendation assistant, not a doctor. Recommend practical e
 
 Use the supplied calculated targets and logged foods as facts. Do not invent medical diagnoses. Do not prescribe medication or supplements. Do not claim to treat diseases. Do not contradict the calculated calorie or macronutrient targets. Prefer realistic everyday foods. Consider the user's fitness goal. Avoid extreme calorie restriction and extreme overeating.
 
-Return a JSON array only, with exactly four recommendations in this order: breakfast, lunch, snack, dinner. Generate exactly one recommendation for each meal type, using the authenticated user's nutrition targets, profile, fitness goal, activity level, and available daily calorie/protein context. Each recommendation must contain meal_type (exactly one of breakfast, lunch, snack, dinner), title, description, foods (an array of objects with name and quantity), estimated_nutrition (calories, protein_g, carbohydrates_g, fat_g, fiber_g as non-negative numbers), and reason. Do not combine meal types, omit a meal type, duplicate a meal type, include generic recommendation categories, or include fields other than those requested. Do not include markdown.
+The user's selected country, state/province and optional city are required context: make them materially influence the actual dish names, ingredients, meal choices and preparation styles. Use familiar regional dishes and locally available ingredients where practical; do not substitute generic international meals. Respect dietary preference and every listed allergy. Do not infer treatment or disease-specific diets from diagnoses. Regional authenticity must never override nutrition quality.
+
+Recommend only nutritious, balanced food based on whole or minimally processed ingredients. Junk food, fast food, sugary soft drinks, packaged sugary snacks, highly processed convenience meals, pizza, burgers, French fries, potato chips and deep-fried fast food are prohibited. Do not include these in titles or ingredients, even as optional alternatives. Prefer vegetables, fruits, pulses, legumes, whole grains and nutritious protein sources, using healthier preparation methods such as steaming, baking, grilling, roasting or moderate sautéing as appropriate. Do not classify a traditional food as unhealthy solely because of its name; assess its ingredients and preparation.
+
+Return a JSON array only, with exactly four recommendations in this order: breakfast, lunch, snack, dinner. Generate exactly one recommendation for each meal type, using the authenticated user's nutrition targets, profile, fitness goal, activity level, and available daily calorie/protein context. Each recommendation must contain meal_type (exactly one of breakfast, lunch, snack, dinner), title, description, foods (an array of ingredient objects with name and serving quantity), estimated_nutrition (calories, protein_g, carbohydrates_g, fat_g, fiber_g as non-negative numbers), reason, regional_relevance (brief explanation of the connection to the selected region), and preparation_guidance (healthy preparation method). Nutritional values are estimates, not verified catalog values. Do not combine meal types, omit a meal type, duplicate a meal type, include generic recommendation categories, or include fields other than those requested. Do not include markdown.
 
 User and nutrition context:
 {$contextJson}
@@ -316,7 +395,7 @@ PROMPT;
 		$finishReason = $decoded['candidates'][0]['finishReason'] ?? null;
 
 		if ($finishReason === 'SAFETY' || !is_string($text) || trim($text) === '') {
-			throw new RuntimeException('Gemini did not return usable recommendations.');
+			throw new GeminiResponseException('Gemini did not return usable recommendations.');
 		}
 
 		$text = trim($text);
@@ -328,8 +407,8 @@ PROMPT;
 			$recommendations = $recommendations['recommendations'] ?? null;
 		}
 
-		if (!is_array($recommendations) || count($recommendations) !== 4) {
-			throw new RuntimeException('Gemini returned malformed recommendations.');
+		if (!is_array($recommendations) || !array_is_list($recommendations) || count($recommendations) !== 4) {
+			throw new GeminiResponseException('Gemini returned malformed recommendations.');
 		}
 
 		$normalized = [];
@@ -337,45 +416,51 @@ PROMPT;
 		$seenMealTypes = [];
 		foreach ($recommendations as $recommendation) {
 			if (!is_array($recommendation) || !is_string($recommendation['meal_type'] ?? null) || !is_string($recommendation['title'] ?? null) || !is_string($recommendation['description'] ?? null) || !is_string($recommendation['reason'] ?? null) || !is_array($recommendation['foods'] ?? null) || !is_array($recommendation['estimated_nutrition'] ?? null)) {
-				throw new RuntimeException('Gemini returned malformed recommendations.');
+				throw new GeminiResponseException('Gemini returned malformed recommendations.');
+			}
+			if (!is_string($recommendation['regional_relevance'] ?? null) || !is_string($recommendation['preparation_guidance'] ?? null)) {
+				throw new GeminiResponseException('Gemini returned incomplete recommendation details.');
 			}
 			$mealType = strtolower(trim($recommendation['meal_type']));
 			if (!in_array($mealType, $mealTypes, true) || isset($seenMealTypes[$mealType])) {
-				throw new RuntimeException('Gemini returned invalid meal types.');
+				throw new GeminiResponseException('Gemini returned invalid meal types.');
 			}
 			$seenMealTypes[$mealType] = true;
 
-			if ($recommendation['foods'] === []) {
-				throw new RuntimeException('Gemini returned malformed foods.');
+			if ($recommendation['foods'] === [] || count($recommendation['foods']) > 30) {
+				throw new GeminiResponseException('Gemini returned malformed foods.');
 			}
 			$foods = [];
 			foreach ($recommendation['foods'] as $food) {
 				if (!is_array($food) || !is_string($food['name'] ?? null) || !is_string($food['quantity'] ?? null)) {
-					throw new RuntimeException('Gemini returned malformed foods.');
+					throw new GeminiResponseException('Gemini returned malformed foods.');
 				}
-				$foods[] = ['name' => self::text($food['name']), 'quantity' => self::text($food['quantity'])];
+				$foods[] = ['name' => self::text($food['name'], 150), 'quantity' => self::text($food['quantity'], 100)];
 			}
 
 			$nutrition = [];
 			foreach (['calories', 'protein_g', 'carbohydrates_g', 'fat_g', 'fiber_g'] as $field) {
 				$value = $recommendation['estimated_nutrition'][$field] ?? null;
-				if (!is_numeric($value) || !is_finite((float) $value) || (float) $value < 0) {
-					throw new RuntimeException('Gemini returned malformed nutrition.');
+				$maximum = $field === 'calories' ? 10000 : ($field === 'fiber_g' ? 500 : 2000);
+				if ((!is_int($value) && !is_float($value)) || !is_finite((float) $value) || (float) $value < 0 || (float) $value > $maximum) {
+					throw new GeminiResponseException('Gemini returned malformed nutrition.');
 				}
 				$nutrition[$field] = round((float) $value, 2);
 			}
 
 			$normalized[] = [
 				'meal_type' => $mealType,
-				'title' => self::text($recommendation['title']),
-				'description' => self::text($recommendation['description']),
+				'title' => self::text($recommendation['title'], 191),
+				'description' => self::text($recommendation['description'], 2000),
 				'foods' => $foods,
 				'estimated_nutrition' => $nutrition,
-				'reason' => self::text($recommendation['reason']),
+				'reason' => self::text($recommendation['reason'], 1000),
+				'regional_relevance' => self::text($recommendation['regional_relevance'], 500),
+				'preparation_guidance' => self::text($recommendation['preparation_guidance'], 500),
 			];
 		}
 		if (array_keys($seenMealTypes) !== $mealTypes) {
-			throw new RuntimeException('Gemini returned incomplete meal types.');
+			throw new GeminiResponseException('Gemini returned incomplete meal types.');
 		}
 
 		return $normalized;
@@ -501,7 +586,7 @@ PROMPT;
 	{
 		$value = trim(preg_replace('/[\x00-\x1F\x7F]/', '', $value) ?? '');
 		if ($value === '' || strlen($value) > $maxLength) {
-			throw new RuntimeException('Gemini returned invalid text.');
+			throw new GeminiResponseException('Gemini returned invalid text.');
 		}
 
 		return $value;

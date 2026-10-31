@@ -51,6 +51,12 @@ The backend reads configuration from `backend/.env`. It supports application set
 
 The canonical schema is `database/schema.sql`. The file `backend/database/schema.sql` is an empty legacy placeholder and must not be treated as a second schema.
 
+For an existing database, apply the optional medical profile tables with `mysql -u <user> -p health_app < database/health_medical_profile.sql` from the repository root. This additive migration does not alter `users` or `user_profiles`.
+
+Food-region personalization uses `mysql -u <user> -p health_app < database/food_location_preferences.sql`. The migration creates the per-user food location table and additively extends recommendation history with regional guidance and nutrition provenance columns.
+
+Authenticated clients can manage the food region at `GET`, `PUT`, and `DELETE /api/v1/health/food-location`. The PUT body accepts `country` (required), optional `country_code`, `state`, and `city`. Food recommendations require a saved country and otherwise return `FOOD_LOCATION_NOT_CONFIGURED`; generated meal values are labeled `ai_estimate`.
+
 ## Running Locally
 
 With Laragon Apache running, use:
@@ -69,10 +75,29 @@ http://localhost/health-app/backend/api/v1
 
 - `POST /auth/register`
 - `POST /auth/login`
+- `POST /auth/change-password`
 - `GET /auth/me`
 - `POST /auth/logout`
+- `DELETE /account`
 
 Authentication uses bearer tokens. The raw token is returned only at login; only its SHA-256 hash is stored in `user_sessions`.
+
+Change a password with an authenticated request body containing `current_password`, `new_password`, and `confirm_password`. Passwords must be at least 8 characters and no more than 72 bytes. On success, all sessions for that user are invalidated and the user must log in again.
+
+Deactivate an account (the user-facing action may be labelled "Delete Account") with an authenticated `DELETE /account` request and this JSON body:
+
+```json
+{
+  "current_password": "your current password",
+  "confirmation": "DEACTIVATE MY ACCOUNT"
+}
+```
+
+The request accepts no query parameters or additional body fields. The authenticated session determines the account; a client-supplied user ID is rejected. Success returns `account_deactivated` and `sessions_invalidated`. It explicitly reports that subscription billing was not cancelled and may continue. Validation errors use `VALIDATION_ERROR`; an incorrect password returns `INVALID_CURRENT_PASSWORD`; a no-longer-active account returns `ACCOUNT_NOT_ACTIVE`; database failures return `DATABASE_ERROR`.
+
+Deactivation is synchronous and transactional. It verifies the current password, changes the existing `users.status` value from `active` to `inactive`, and invalidates all sessions. The schema already supports `inactive`; `deleted_at` remains NULL, and no migration is required. Login and bearer-token authentication accept only active users, so old tokens cannot access protected APIs.
+
+Deactivation does not delete or anonymize user data. Profiles, health records, AI history, conversations, meal plans, uploads, support records, subscriptions, payments, provider references, and device records remain unchanged. It does not cancel recurring subscriptions or stop provider-side billing. Users must separately cancel any recurring subscription with the payment provider; the API does not claim cancellation.
 
 ## Health Profile Endpoints
 
