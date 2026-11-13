@@ -161,6 +161,44 @@ PROMPT;
 		return self::text($text, 1000);
 	}
 
+	public static function generateChatResponse(array $messages, ?callable $request = null): string
+	{
+		$conversation = [];
+		foreach ($messages as $message) {
+			$role = $message['role'] ?? null;
+			$text = $message['message'] ?? null;
+			if (!in_array($role, ['user', 'assistant'], true) || !is_string($text) || trim($text) === '') {
+				throw new InvalidArgumentException('Chat history is malformed.');
+			}
+			$conversation[] = ($role === 'assistant' ? 'Assistant' : 'User') . ': ' . trim($text);
+		}
+
+		if ($conversation === []) {
+			throw new InvalidArgumentException('Chat history cannot be empty.');
+		}
+
+		$systemInstruction = 'You are a supportive health and wellness assistant. Provide general, evidence-informed wellness guidance, not medical diagnosis or treatment. Encourage professional care for urgent or serious symptoms. Do not claim to replace a licensed clinician.';
+		$prompt = implode("\n\n", $conversation) . "\n\nAssistant:";
+		$response = $request !== null
+			? $request($prompt, $systemInstruction)
+			: self::sendRequest($prompt, false, null, null, null, $systemInstruction);
+		$decoded = json_decode($response, true);
+		if (!is_array($decoded)) {
+			throw new GeminiResponseException('Gemini returned an invalid chat response.');
+		}
+		$candidate = $decoded['candidates'][0] ?? null;
+		$content = is_array($candidate) ? ($candidate['content'] ?? null) : null;
+		$parts = is_array($content) ? ($content['parts'] ?? null) : null;
+		$text = is_array($parts) && is_array($parts[0] ?? null) ? ($parts[0]['text'] ?? null) : null;
+		$finishReason = is_array($candidate) ? ($candidate['finishReason'] ?? null) : null;
+
+		if ($finishReason === 'SAFETY' || !is_string($text) || trim($text) === '' || strlen($text) > 20000) {
+			throw new GeminiResponseException('Gemini did not return a usable chat response.');
+		}
+
+		return trim($text);
+	}
+
 	private static function sendRequest(
 		string $prompt,
 		bool $jsonResponse,
